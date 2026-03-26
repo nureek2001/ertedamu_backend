@@ -1,92 +1,158 @@
 from django.core.management.base import BaseCommand
-from django.utils.text import slugify
-from activities.models import ActivityCategory, Activity
+from activities.models import Activity, ActivityCategory
+
+CATEGORIES = [
+    ("fine_motor", "Мелкая моторика"),
+    ("cognitive", "Когнитивное развитие"),
+    ("speech", "Речь"),
+    ("self_care", "Самообслуживание"),
+    ("social_emotional", "Социальное развитие"),
+    ("gross_motor", "Крупная моторика"),
+]
+
+AGES = list(range(1, 37)) + [48, 60, 72]
+
+
+def items_for_age(age):
+    if age <= 12:
+        return {
+            "gross_motor": [
+                ("Перевороты и движения", "Помогаем ребёнку двигаться активнее"),
+                ("Опора на ручки", "Укрепляем мышцы шеи и спины"),
+                ("Ползание к игрушке", "Стимулируем движение к цели"),
+            ],
+            "fine_motor": [
+                ("Хватай игрушку", "Учимся брать предметы руками"),
+                ("Перекладывание", "Перекладываем игрушку из руки в руку"),
+                ("Трогай и исследуй", "Развиваем пальчики через разные текстуры"),
+            ],
+            "speech": [
+                ("Повторяй звуки", "Слушаем и повторяем простые звуки"),
+                ("Песенка дня", "Развиваем слух и речь через музыку"),
+                ("Назови предмет", "Формируем пассивный словарь"),
+            ],
+            "cognitive": [
+                ("Где игрушка?", "Ищем предмет глазами"),
+                ("Причина и следствие", "Нажал — зазвучало"),
+                ("Большой и маленький", "Учимся различать размеры"),
+            ],
+            "social_emotional": [
+                ("Улыбнись маме", "Развиваем эмоциональный контакт"),
+                ("Ладушки", "Учимся взаимодействовать"),
+                ("Прятки с лицом", "Играем в ку-ку"),
+            ],
+            "self_care": [
+                ("Пьём из чашки с помощью", "Пробуем новые бытовые навыки"),
+                ("Ложка вместе с мамой", "Знакомимся с кормлением"),
+                ("Моем ручки", "Привыкаем к рутине ухода"),
+            ],
+        }
+    elif age <= 36:
+        return {
+            "gross_motor": [
+                ("Прыжки на месте", "Развиваем координацию"),
+                ("Полоса препятствий", "Тренируем движение и баланс"),
+                ("Бег к цели", "Развиваем скорость и внимание"),
+            ],
+            "fine_motor": [
+                ("Башня из кубиков", "Строим и координируем движения"),
+                ("Рисуем линии", "Развиваем контроль руки"),
+                ("Сортировка предметов", "Тренируем пальчики"),
+            ],
+            "speech": [
+                ("Повтори слово", "Развиваем активную речь"),
+                ("Назови картинку", "Расширяем словарь"),
+                ("Скажи фразу", "Учимся говорить короткими предложениями"),
+            ],
+            "cognitive": [
+                ("Найди пару", "Развиваем память"),
+                ("Собери по цвету", "Учимся классифицировать"),
+                ("Что лишнее?", "Тренируем логику"),
+            ],
+            "social_emotional": [
+                ("Игра по очереди", "Учимся ждать и взаимодействовать"),
+                ("Покажи эмоцию", "Учимся понимать чувства"),
+                ("Помоги игрушке", "Развиваем эмпатию"),
+            ],
+            "self_care": [
+                ("Едим сами", "Развиваем самостоятельность"),
+                ("Надень носочки", "Учимся одеваться"),
+                ("Убери игрушки", "Привыкаем к порядку"),
+            ],
+        }
+    else:
+        return {
+            "gross_motor": [
+                ("Прыжки с балансом", "Улучшаем контроль тела"),
+                ("Игра с мячом", "Развиваем координацию"),
+                ("Мини-спорт", "Укрепляем крупную моторику"),
+            ],
+            "fine_motor": [
+                ("Рисунок по образцу", "Развиваем точность"),
+                ("Аппликация", "Тренируем пальцы"),
+                ("Вырезание", "Работаем ножницами"),
+            ],
+            "speech": [
+                ("Перескажи историю", "Развиваем связную речь"),
+                ("Опиши предмет", "Учимся подробно говорить"),
+                ("Ответь на вопрос", "Тренируем диалог"),
+            ],
+            "cognitive": [
+                ("Счёт и формы", "Развиваем мышление"),
+                ("Простая задача", "Учимся рассуждать"),
+                ("Запомни последовательность", "Тренируем память"),
+            ],
+            "social_emotional": [
+                ("Командная игра", "Развиваем общение"),
+                ("Понимание эмоций", "Учимся распознавать чувства"),
+                ("Правила игры", "Развиваем самоконтроль"),
+            ],
+            "self_care": [
+                ("Собери рюкзак", "Учимся организованности"),
+                ("Сам оденься", "Закрепляем самостоятельность"),
+                ("Уход за собой", "Навык личной гигиены"),
+            ],
+        }
 
 
 class Command(BaseCommand):
-    help = "Создаёт стартовые категории и активности"
+    help = "Seed activities"
 
-    def handle(self, *args, **options):
-        categories = [
-            {"name": "Motor Skills", "slug": "motor-skills"},
-            {"name": "Speech", "slug": "speech"},
-            {"name": "Social", "slug": "social"},
-            {"name": "Cognitive", "slug": "cognitive"},
-        ]
+    def handle(self, *args, **kwargs):
+        category_objs = {}
 
-        for item in categories:
-            ActivityCategory.objects.update_or_create(
-                slug=item["slug"],
-                defaults={"name": item["name"]}
-            )
-
-        activities_data = [
-            {
-                "title": "Собирание пирамидки",
-                "description": "Ребёнок собирает кольца пирамидки по размеру.",
-                "instructions": "Покажите пример и дайте ребёнку повторить.",
-                "category_slug": "motor-skills",
-                "min_age_months": 12,
-                "max_age_months": 24,
-                "duration_minutes": 10,
-            },
-            {
-                "title": "Повторение звуков",
-                "description": "Ребёнок повторяет простые слоги и звуки.",
-                "instructions": "Произносите ма-ма, па-па, ба-ба и просите повторять.",
-                "category_slug": "speech",
-                "min_age_months": 12,
-                "max_age_months": 30,
-                "duration_minutes": 10,
-            },
-            {
-                "title": "Игра в ладушки",
-                "description": "Развитие социальной реакции и подражания.",
-                "instructions": "Играйте вместе и хвалите за участие.",
-                "category_slug": "social",
-                "min_age_months": 8,
-                "max_age_months": 24,
-                "duration_minutes": 5,
-            },
-            {
-                "title": "Найди игрушку",
-                "description": "Развитие внимания и понимания речи.",
-                "instructions": "Попросите ребёнка найти знакомую игрушку среди нескольких.",
-                "category_slug": "cognitive",
-                "min_age_months": 18,
-                "max_age_months": 36,
-                "duration_minutes": 10,
-            },
-        ]
-
-        created_count = 0
-        updated_count = 0
-
-        for item in activities_data:
-            category = ActivityCategory.objects.get(slug=item["category_slug"])
-            slug = slugify(item["title"])
-
-            _, created = Activity.objects.update_or_create(
+        for slug, name in CATEGORIES:
+            obj, _ = ActivityCategory.objects.get_or_create(
                 slug=slug,
-                defaults={
-                    "title": item["title"],
-                    "description": item["description"],
-                    "instructions": item["instructions"],
-                    "category": category,
-                    "min_age_months": item["min_age_months"],
-                    "max_age_months": item["max_age_months"],
-                    "duration_minutes": item["duration_minutes"],
-                    "is_active": True,
-                }
+                defaults={"name": name}
             )
+            category_objs[slug] = obj
 
-            if created:
-                created_count += 1
-            else:
-                updated_count += 1
+        created = 0
 
-        self.stdout.write(
-            self.style.SUCCESS(
-                f"Activities seeded. Created: {created_count}, Updated: {updated_count}"
-            )
-        )
+        for age in AGES:
+            data = items_for_age(age)
+
+            for slug, items in data.items():
+                for idx, item in enumerate(items, start=1):
+                    title, subtitle = item
+                    obj, was_created = Activity.objects.get_or_create(
+                        slug=f"m{age}-{slug}-{idx-1}",
+                        defaults={
+                            "title": title,
+                            "subtitle": subtitle,
+                            "description": subtitle,
+                            "instructions": f"{title}: выполняйте вместе с ребёнком в возрасте {age} месяцев.",
+                            "category": category_objs[slug],
+                            "min_age_months": age,
+                            "max_age_months": age,
+                            "duration_minutes": 5 + idx * 2,
+                            "difficulty": "easy" if idx == 1 else "ok" if idx == 2 else "hard",
+                            "is_active": True,
+                            "order": idx,
+                        }
+                    )
+                    if was_created:
+                        created += 1
+
+        self.stdout.write(self.style.SUCCESS(f"Создано activities: {created}"))

@@ -1,18 +1,11 @@
-from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
+from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from families.models import Child, FamilyMembership
+from .models import Activity, ActivityCategory, ActivityCompletion
+from .serializers import ActivitySerializer, ActivityCompletionSerializer, ActivityCategorySerializer
 from families.utils import calculate_age_months
-from .models import ActivityCategory, Activity, ActivityCompletion
-from .serializers import (
-    ActivityCategorySerializer,
-    ActivitySerializer,
-    ActivityCompletionSerializer,
-    ActivityCompletionCreateSerializer,
-)
-
 
 def get_child_for_user(user, child_id):
     child = Child.objects.filter(pk=child_id).select_related('family').first()
@@ -29,85 +22,94 @@ def get_child_for_user(user, child_id):
 
     return child, membership
 
-
-class ActivityCategoryListView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        categories = ActivityCategory.objects.all()
-        return Response(ActivityCategorySerializer(categories, many=True).data)
+class ActivityCategoryListAPIView(generics.ListAPIView):
+    queryset = ActivityCategory.objects.all()
+    serializer_class = ActivityCategorySerializer
+    permission_classes = [permissions.IsAuthenticated]
 
 
-class ActivityListView(APIView):
-    permission_classes = [IsAuthenticated]
+class ActivityListAPIView(generics.ListAPIView):
+    serializer_class = ActivitySerializer
+    permission_classes = [permissions.IsAuthenticated]
 
-    def get(self, request):
-        queryset = Activity.objects.filter(is_active=True).select_related('category')
+    def get_queryset(self):
+        queryset = Activity.objects.filter(is_active=True).select_related("category")
 
-        category_slug = request.query_params.get('category')
-        if category_slug:
-            queryset = queryset.filter(category__slug=category_slug)
+        child_id = self.request.query_params.get("child_id")
+        category = self.request.query_params.get("category")
+        month = self.request.query_params.get("month")
 
-        child_id = request.query_params.get('child_id')
+        if category and category != "all":
+            queryset = queryset.filter(category__slug=category)
+
+        if month:
+            try:
+                month = int(month)
+                queryset = queryset.filter(
+                    min_age_months__lte=month,
+                    max_age_months__gte=month,
+                )
+            except ValueError:
+                pass
+
         if child_id:
             child, membership = get_child_for_user(request.user, child_id)
-            if not child:
+            age_months = calculate_age_months(child.birth_date)
+
+            if child:
+                queryset = queryset.filter(
+                    min_age_months__lte=age_months,
+                    max_age_months__gte=age_months,
+                )
+            else:
                 return Response({"detail": "Ребёнок не найден или нет доступа."}, status=status.HTTP_404_NOT_FOUND)
 
-            age_months = calculate_age_months(child.birth_date)
-            queryset = queryset.filter(
-                min_age_months__lte=age_months,
-                max_age_months__gte=age_months
-            )
 
-        return Response(ActivitySerializer(queryset, many=True).data)
+        return queryset
 
 
-class ActivityDetailView(APIView):
-    permission_classes = [IsAuthenticated]
+class ActivityDetailAPIView(generics.RetrieveAPIView):
+    queryset = Activity.objects.filter(is_active=True).select_related("category")
+    serializer_class = ActivitySerializer
+    permission_classes = [permissions.IsAuthenticated]
 
-    def get(self, request, activity_id):
-        activity = Activity.objects.filter(pk=activity_id, is_active=True).select_related('category').first()
+
+class ActivityCompletionCreateAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, activity_slug):
+        child_id = request.data.get("child_id")
+        print(child_id)
+        difficulty = request.data.get("difficulty")
+        note = request.data.get("note")
+        child, membership = get_child_for_user(request.user, child_id)
+        if not child:
+            return Response({"detail": "Ребёнок не найден."}, status=status.HTTP_404_NOT_FOUND)
+
+        activity = Activity.objects.filter(slug = activity_slug, is_active=True).first()
         if not activity:
             return Response({"detail": "Активность не найдена."}, status=status.HTTP_404_NOT_FOUND)
 
-        return Response(ActivitySerializer(activity).data)
-
-
-class ActivityCompleteView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request, activity_id):
-        activity = Activity.objects.filter(pk=activity_id, is_active=True).select_related('category').first()
-        if not activity:
-            return Response({"detail": "Активность не найдена."}, status=status.HTTP_404_NOT_FOUND)
-
-        serializer = ActivityCompletionCreateSerializer(
-            data=request.data,
-            context={'request': request, 'activity': activity}
+        completion = ActivityCompletion.objects.create(
+            child=child,
+            activity=activity,
+            difficulty=difficulty,
+            note=note,
         )
-        serializer.is_valid(raise_exception=True)
-        completion = serializer.save()
-
         return Response(ActivityCompletionSerializer(completion).data, status=status.HTTP_201_CREATED)
 
 
-class ChildActivityHistoryView(APIView):
-    permission_classes = [IsAuthenticated]
+class ChildActivityHistoryAPIView(generics.ListAPIView):
+    serializer_class = ActivityCompletionSerializer
+    permission_classes = [permissions.IsAuthenticated]
 
-    def get(self, request, child_id):
-        child, membership = get_child_for_user(request.user, child_id)
+    def get_queryset(self):
+        child_id = self.kwargs["child_id"]
+        child, membership = get_child_for_user(self.request.user, child_id)
+        print(child)
         if not child:
-            return Response({"detail": "Ребёнок не найден или нет доступа."}, status=status.HTTP_404_NOT_FOUND)
-
-        queryset = ActivityCompletion.objects.filter(
-            child=child
-        ).select_related(
-            'activity', 'activity__category'
-        )
-
-        difficulty = request.query_params.get('difficulty')
-        if difficulty:
-            queryset = queryset.filter(difficulty=difficulty)
-
-        return Response(ActivityCompletionSerializer(queryset, many=True).data)
+            return ActivityCompletion.objects.none()
+        print(ActivityCompletion.objects.filter(child=child).count())
+        return ActivityCompletion.objects.filter(
+            child = child
+        ).select_related("activity", "activity__category").distinct()

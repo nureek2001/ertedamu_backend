@@ -1,16 +1,16 @@
 from django.urls import path
 from .views import (
-    ActivityCategoryListView,
-    ActivityListView,
-    ActivityDetailView,
-    ActivityCompleteView,
-    ChildActivityHistoryView,
+    ActivityCategoryListAPIView,
+    ActivityListAPIView,
+    ActivityDetailAPIView,
+    ActivityCompletionCreateAPIView,
+    ChildActivityHistoryAPIView,
 )
 
 urlpatterns = [
-    path('categories/', ActivityCategoryListView.as_view(), name='activity-categories'),
-    path('', ActivityListView.as_view(), name='activity-list'),
-    path('<int:activity_id>/', ActivityDetailView.as_view(), name='activity-detail'),
-    path('<int:activity_id>/complete/', ActivityCompleteView.as_view(), name='activity-complete'),
-    path('children/<int:child_id>/history/', ChildActivityHistoryView.as_view(), name='child-activity-history'),
+    path("categories/", ActivityCategoryListAPIView.as_view(), name="activity-categories"),
+    path("", ActivityListAPIView.as_view(), name="activity-list"),
+    path("<int:pk>/", ActivityDetailAPIView.as_view(), name="activity-detail"),
+    path("<slug:activity_slug>/complete/", ActivityCompletionCreateAPIView.as_view(), name="activity-complete"),
+    path("children/<int:child_id>/history/", ChildActivityHistoryAPIView.as_view(), name="activity-history"),
 ]

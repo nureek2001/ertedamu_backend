@@ -23,7 +23,9 @@ INSTALLED_APPS = [
     'families',
     'screenings',
     'activities',
-    'milestones'
+    'milestones',
+    'articles',
+    'consults'
 ]
 
 MIDDLEWARE = [
