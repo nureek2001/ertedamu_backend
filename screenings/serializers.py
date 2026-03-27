@@ -11,7 +11,12 @@ from .models import (
     ScreeningSession,
     ScreeningAnswer,
 )
-from .utils import can_start_screening, calculate_session_result
+from .utils import (
+    can_start_screening,
+    calculate_session_result,
+    get_early_dev_analysis,
+    get_mchat_analysis,
+)
 
 
 class ScreeningQuestionSerializer(serializers.ModelSerializer):
@@ -94,6 +99,10 @@ class ScreeningSessionSerializer(serializers.ModelSerializer):
     template = ScreeningTemplateSerializer(read_only=True)
     answers = ScreeningAnswerSerializer(many=True, read_only=True)
 
+    summary = serializers.SerializerMethodField()
+    detailed_analysis = serializers.SerializerMethodField()
+    general_recommendations = serializers.SerializerMethodField()
+
     class Meta:
         model = ScreeningSession
         fields = [
@@ -108,9 +117,32 @@ class ScreeningSessionSerializer(serializers.ModelSerializer):
             'completed_at',
             'notes',
             'answers',
+            'summary',
+            'detailed_analysis',
+            'general_recommendations',
         ]
 
+    def get_summary(self, obj):
+        if obj.template.template_type == 'early_dev':
+            return get_early_dev_analysis(obj).get('summary')
+        if obj.template.template_type == 'mchat':
+            return get_mchat_analysis(obj).get('summary')
+        return None
 
+    def get_detailed_analysis(self, obj):
+        if obj.template.template_type == 'early_dev':
+            return get_early_dev_analysis(obj).get('detailed_analysis', [])
+        if obj.template.template_type == 'mchat':
+            return get_mchat_analysis(obj).get('detailed_analysis', [])
+        return []
+
+    def get_general_recommendations(self, obj):
+        if obj.template.template_type == 'early_dev':
+            return get_early_dev_analysis(obj).get('general_recommendations', [])
+        if obj.template.template_type == 'mchat':
+            return get_mchat_analysis(obj).get('general_recommendations', [])
+        return []
+        
 class ScreeningSessionCreateSerializer(serializers.Serializer):
     child_id = serializers.IntegerField()
     template_code = serializers.CharField()

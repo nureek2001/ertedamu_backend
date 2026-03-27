@@ -34,6 +34,32 @@ def get_child_for_user(user, child_id):
     return child, membership
 
 
+def get_session_for_user(user, session_id):
+    session = (
+        ScreeningSession.objects.select_related(
+            'child',
+            'child__family',
+            'template',
+        ).prefetch_related(
+            'answers__question',
+            'template__questions',
+        ).filter(pk=session_id).first()
+    )
+
+    if not session:
+        return None, None
+
+    membership = FamilyMembership.objects.filter(
+        user=user,
+        family=session.child.family
+    ).first()
+
+    if not membership:
+        return session, None
+
+    return session, membership
+
+
 class ScreeningTemplateListView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -60,7 +86,16 @@ class ScreeningAvailabilityView(APIView):
     def get(self, request, child_id):
         child, membership = get_child_for_user(request.user, child_id)
         if not child:
-            return Response({"detail": "Ребёнок не найден или нет доступа."}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {"detail": "Ребёнок не найден или нет доступа."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if not membership.can_view_screenings:
+            return Response(
+                {"detail": "Нет прав на просмотр скринингов."},
+                status=status.HTTP_403_FORBIDDEN
+            )
 
         templates = ScreeningTemplate.objects.filter(is_active=True)
         data = []
@@ -80,9 +115,24 @@ class ScreeningSessionCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        serializer = ScreeningSessionCreateSerializer(data=request.data, context={'request': request})
+        serializer = ScreeningSessionCreateSerializer(
+            data=request.data,
+            context={'request': request}
+        )
         serializer.is_valid(raise_exception=True)
         session = serializer.save()
+
+        session = (
+            ScreeningSession.objects.select_related(
+                'child',
+                'child__family',
+                'template'
+            ).prefetch_related(
+                'answers__question',
+                'template__questions'
+            ).get(pk=session.pk)
+        )
+
         return Response(ScreeningSessionSerializer(session).data, status=status.HTTP_201_CREATED)
 
 
@@ -90,19 +140,10 @@ class ScreeningSessionDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, session_id):
-        session = ScreeningSession.objects.select_related(
-            'child', 'child__family', 'template'
-        ).prefetch_related(
-            'answers__question'
-        ).filter(pk=session_id).first()
+        session, membership = get_session_for_user(request.user, session_id)
 
         if not session:
             return Response({"detail": "Сессия не найдена."}, status=status.HTTP_404_NOT_FOUND)
-
-        membership = FamilyMembership.objects.filter(
-            user=request.user,
-            family=session.child.family
-        ).first()
 
         if not membership or not membership.can_view_screenings:
             return Response({"detail": "Нет доступа."}, status=status.HTTP_403_FORBIDDEN)
@@ -114,29 +155,35 @@ class ScreeningSessionAnswersUpsertView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, session_id):
-        session = ScreeningSession.objects.select_related(
-            'child', 'child__family', 'template'
-        ).prefetch_related('template__questions').filter(pk=session_id).first()
+        session, membership = get_session_for_user(request.user, session_id)
 
         if not session:
             return Response({"detail": "Сессия не найдена."}, status=status.HTTP_404_NOT_FOUND)
-
-        membership = FamilyMembership.objects.filter(
-            user=request.user,
-            family=session.child.family
-        ).first()
 
         if not membership or not membership.can_view_screenings:
             return Response({"detail": "Нет доступа к скринингам."}, status=status.HTTP_403_FORBIDDEN)
 
         if session.status == 'completed':
-            return Response({"detail": "Нельзя изменять завершённую сессию."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": "Нельзя изменять завершённую сессию."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         serializer = ScreeningAnswerBulkUpsertSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         serializer.save_answers(session)
 
-        session.refresh_from_db()
+        session = (
+            ScreeningSession.objects.select_related(
+                'child',
+                'child__family',
+                'template'
+            ).prefetch_related(
+                'answers__question',
+                'template__questions'
+            ).get(pk=session.pk)
+        )
+
         return Response(ScreeningSessionSerializer(session).data)
 
 
@@ -144,20 +191,10 @@ class ScreeningSessionSubmitView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, session_id):
-        session = ScreeningSession.objects.select_related(
-            'child', 'child__family', 'template'
-        ).prefetch_related(
-            'answers__question',
-            'template__questions'
-        ).filter(pk=session_id).first()
+        session, membership = get_session_for_user(request.user, session_id)
 
         if not session:
             return Response({"detail": "Сессия не найдена."}, status=status.HTTP_404_NOT_FOUND)
-
-        membership = FamilyMembership.objects.filter(
-            user=request.user,
-            family=session.child.family
-        ).first()
 
         if not membership or not membership.can_view_screenings:
             return Response({"detail": "Нет доступа к скринингам."}, status=status.HTTP_403_FORBIDDEN)
@@ -165,6 +202,17 @@ class ScreeningSessionSubmitView(APIView):
         serializer = ScreeningSubmitSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         session = serializer.finalize(session)
+
+        session = (
+            ScreeningSession.objects.select_related(
+                'child',
+                'child__family',
+                'template'
+            ).prefetch_related(
+                'answers__question',
+                'template__questions'
+            ).get(pk=session.pk)
+        )
 
         return Response(ScreeningSessionSerializer(session).data)
 
@@ -175,16 +223,24 @@ class ChildScreeningHistoryView(APIView):
     def get(self, request, child_id):
         child, membership = get_child_for_user(request.user, child_id)
         if not child:
-            return Response({"detail": "Ребёнок не найден или нет доступа."}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {"detail": "Ребёнок не найден или нет доступа."},
+                status=status.HTTP_404_NOT_FOUND
+            )
 
         if not membership.can_view_screenings:
-            return Response({"detail": "Нет прав на просмотр скринингов."}, status=status.HTTP_403_FORBIDDEN)
+            return Response(
+                {"detail": "Нет прав на просмотр скринингов."},
+                status=status.HTTP_403_FORBIDDEN
+            )
 
         sessions = ScreeningSession.objects.select_related(
-            'template', 'child'
+            'template',
+            'child'
         ).prefetch_related(
-            'answers__question'
-        ).filter(child=child)
+            'answers__question',
+            'template__questions'
+        ).filter(child=child).order_by('-completed_at', '-started_at')
 
         template_code = request.query_params.get('template')
         if template_code:
@@ -199,21 +255,32 @@ class ChildLatestScreeningView(APIView):
     def get(self, request, child_id):
         child, membership = get_child_for_user(request.user, child_id)
         if not child:
-            return Response({"detail": "Ребёнок не найден или нет доступа."}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {"detail": "Ребёнок не найден или нет доступа."},
+                status=status.HTTP_404_NOT_FOUND
+            )
 
         if not membership.can_view_screenings:
-            return Response({"detail": "Нет прав на просмотр скринингов."}, status=status.HTTP_403_FORBIDDEN)
+            return Response(
+                {"detail": "Нет прав на просмотр скринингов."},
+                status=status.HTTP_403_FORBIDDEN
+            )
 
         session = ScreeningSession.objects.select_related(
-            'template', 'child'
+            'template',
+            'child'
         ).prefetch_related(
-            'answers__question'
+            'answers__question',
+            'template__questions'
         ).filter(
             child=child,
             status='completed'
-        ).order_by('-completed_at').first()
+        ).order_by('-completed_at', '-started_at').first()
 
         if not session:
-            return Response({"detail": "Завершённых скринингов пока нет."}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {"detail": "Завершённых скринингов пока нет."},
+                status=status.HTTP_404_NOT_FOUND
+            )
 
         return Response(ScreeningSessionSerializer(session).data)

@@ -53,7 +53,7 @@ class ActivityListAPIView(generics.ListAPIView):
                 pass
 
         if child_id:
-            child, membership = get_child_for_user(request.user, child_id)
+            child, membership = get_child_for_user(self.request.user, child_id)
             age_months = calculate_age_months(child.birth_date)
 
             if child:
