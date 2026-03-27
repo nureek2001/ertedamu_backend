@@ -17,6 +17,7 @@ from .serializers import (
     FamilySerializer,
     FamilyMembershipSerializer,
     FamilyMemberCreateSerializer,
+    FamilyMeSerializer,
     ChildSerializer,
     ChildCreateSerializer,
     ChildUpdateSerializer,
@@ -78,7 +79,15 @@ class MyFamilyView(APIView):
         if not family:
             return Response({"detail": "Семья не найдена."}, status=status.HTTP_404_NOT_FOUND)
 
-        return Response(FamilySerializer(family).data)
+        my_membership = get_user_membership(request.user, family)
+        members = FamilyMembership.objects.filter(family=family).select_related('user').order_by('id')
+
+        data = {
+            "family": FamilySerializer(family).data,
+            "my_membership": FamilyMembershipSerializer(my_membership).data,
+            "members": FamilyMembershipSerializer(members, many=True).data,
+        }
+        return Response(data)
 
 
 class FamilyMembersView(APIView):
@@ -122,6 +131,9 @@ class FamilyMemberDetailView(APIView):
 
         membership = get_object_or_404(FamilyMembership, pk=pk, family=family)
 
+        if membership.role == 'admin':
+            return Response({"detail": "Нельзя изменять роль администратора через этот endpoint."}, status=status.HTTP_400_BAD_REQUEST)
+
         role = request.data.get('role')
         can_edit_children = request.data.get('can_edit_children')
         can_view_screenings = request.data.get('can_view_screenings')
@@ -129,8 +141,9 @@ class FamilyMemberDetailView(APIView):
 
         if role:
             membership.role = role
-            membership.user.role = role
-            membership.user.save()
+            if membership.user.role != 'admin':
+                membership.user.role = role
+                membership.user.save(update_fields=['role'])
 
         if can_edit_children is not None:
             membership.can_edit_children = bool(can_edit_children)
@@ -157,6 +170,9 @@ class FamilyMemberDetailView(APIView):
 
         if membership.user == request.user:
             return Response({"detail": "Нельзя удалить самого себя из семьи."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if membership.role == 'admin':
+            return Response({"detail": "Нельзя удалить администратора семьи."}, status=status.HTTP_400_BAD_REQUEST)
 
         membership.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -229,6 +245,7 @@ class ChildDetailView(APIView):
 
         return Response(ChildSerializer(child).data)
 
+    @transaction.atomic
     def delete(self, request, pk):
         child, family = self.get_object(request, pk)
         if not child:
@@ -238,7 +255,14 @@ class ChildDetailView(APIView):
         if not membership or not membership.can_edit_children:
             return Response({"detail": "Нет прав для удаления ребёнка."}, status=status.HTTP_403_FORBIDDEN)
 
-        UserChildPreference.objects.filter(family=family, active_child=child).update(active_child=None)
+        next_child = family.children.exclude(pk=child.pk).order_by('-is_primary', 'id').first()
+
+        preferences = UserChildPreference.objects.filter(family=family, active_child=child)
+        if next_child:
+            preferences.update(active_child=next_child)
+        else:
+            preferences.update(active_child=None)
+
         child.delete()
 
         return Response(status=status.HTTP_204_NO_CONTENT)

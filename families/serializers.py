@@ -38,12 +38,18 @@ class FamilyMembershipSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'family', 'joined_at']
 
 
+class FamilyMeSerializer(serializers.Serializer):
+    family = FamilySerializer()
+    my_membership = FamilyMembershipSerializer()
+    members = FamilyMembershipSerializer(many=True)
+
+
 class FamilyMemberCreateSerializer(serializers.Serializer):
     email = serializers.EmailField()
     phone = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     full_name = serializers.CharField(max_length=255)
     role = serializers.ChoiceField(choices=FamilyMembership.ROLE_CHOICES)
-    password = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    password = serializers.CharField(write_only=True)
 
     can_edit_children = serializers.BooleanField(default=False)
     can_view_screenings = serializers.BooleanField(default=True)
@@ -51,6 +57,16 @@ class FamilyMemberCreateSerializer(serializers.Serializer):
 
     def validate_email(self, value):
         return value.lower().strip()
+
+    def validate_phone(self, value):
+        if value is None:
+            return value
+        return value.strip()
+
+    def validate_password(self, value):
+        if len(value.strip()) < 6:
+            raise serializers.ValidationError("Пароль должен быть не короче 6 символов.")
+        return value.strip()
 
     @transaction.atomic
     def create_or_attach_user(self, family):
@@ -60,15 +76,17 @@ class FamilyMemberCreateSerializer(serializers.Serializer):
         user = User.objects.filter(email=email).first()
 
         if user is None:
-            raw_password = validated_data.get('password') or 'TempPass12345'
             user = User.objects.create_user(
                 email=email,
                 phone=validated_data.get('phone'),
                 full_name=validated_data['full_name'],
                 role=validated_data['role'],
-                password=raw_password,
+                password=validated_data['password'],
             )
         else:
+            if FamilyMembership.objects.filter(user=user, family=family).exists():
+                raise serializers.ValidationError("Этот пользователь уже состоит в семье.")
+
             if not user.full_name and validated_data.get('full_name'):
                 user.full_name = validated_data['full_name']
             if not user.phone and validated_data.get('phone'):
@@ -77,19 +95,14 @@ class FamilyMemberCreateSerializer(serializers.Serializer):
                 user.role = validated_data['role']
             user.save()
 
-        membership, created = FamilyMembership.objects.get_or_create(
+        membership = FamilyMembership.objects.create(
             user=user,
             family=family,
-            defaults={
-                'role': validated_data['role'],
-                'can_edit_children': validated_data['can_edit_children'],
-                'can_view_screenings': validated_data['can_view_screenings'],
-                'can_manage_family': validated_data['can_manage_family'],
-            }
+            role=validated_data['role'],
+            can_edit_children=validated_data['can_edit_children'],
+            can_view_screenings=validated_data['can_view_screenings'],
+            can_manage_family=validated_data['can_manage_family'],
         )
-
-        if not created:
-            raise serializers.ValidationError("Этот пользователь уже состоит в семье.")
 
         return membership
 
@@ -175,7 +188,10 @@ class ChildUpdateSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         if validated_data.get('is_primary'):
-            Child.objects.filter(family=instance.family, is_primary=True).exclude(pk=instance.pk).update(is_primary=False)
+            Child.objects.filter(
+                family=instance.family,
+                is_primary=True
+            ).exclude(pk=instance.pk).update(is_primary=False)
         return super().update(instance, validated_data)
 
 
@@ -198,8 +214,8 @@ class SetActiveChildSerializer(serializers.Serializer):
 
 
 class DashboardSerializer(serializers.Serializer):
-    active_child = ChildSerializer()
+    active_child = ChildSerializer(allow_null=True)
     latest_measurement = ChildMeasurementSerializer(allow_null=True)
     total_children = serializers.IntegerField()
     family_members_count = serializers.IntegerField()
-    active_child_age_months = serializers.IntegerField()
+    active_child_age_months = serializers.IntegerField(allow_null=True)

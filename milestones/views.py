@@ -2,15 +2,17 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-
+from django.shortcuts import get_object_or_404, resolve_url
 from families.models import Child, FamilyMembership
 from families.utils import calculate_age_months
+from families.permissions import get_membership
 from .models import MilestoneCategory, Milestone, ChildMilestoneProgress
 from .serializers import (
     MilestoneCategorySerializer,
     MilestoneSerializer,
     ChildMilestoneProgressSerializer,
     MilestoneToggleSerializer,
+    ChildMilestoneProgressResponseSerializer
 )
 
 
@@ -96,47 +98,55 @@ class ChildMilestoneProgressView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, child_id):
-        child, membership = get_child_for_user(request.user, child_id)
-        if not child:
-            return Response({"detail": "Ребёнок не найден или нет доступа."}, status=status.HTTP_404_NOT_FOUND)
+        child = get_object_or_404(
+            Child.objects.select_related('family'),
+            pk=child_id
+        )
 
-        age_months = calculate_age_months(child.birth_date)
+        membership = get_membership(request.user, child.family)
+        if not membership:
+            return Response(
+                {"detail": "Нет доступа к ребёнку."},
+                status=status.HTTP_403_FORBIDDEN
+            )
 
-        milestones = Milestone.objects.filter(
-            is_active=True,
-            min_age_months__lte=age_months,
-            max_age_months__gte=age_months
-        ).select_related('category')
+        # Берём ВСЕ milestones, а не только по текущему возрасту
+        milestones = list(
+            Milestone.objects.filter(is_active=True)
+            .select_related('category')
+            .order_by('min_age_months', 'id')
+        )
 
-        progress_map = {
-            item.milestone_id: item
-            for item in ChildMilestoneProgress.objects.filter(
-                child=child,
-                milestone__in=milestones
-            ).select_related('milestone', 'milestone__category')
-        }
+        progress_qs = ChildMilestoneProgress.objects.filter(
+            child=child,
+            milestone__in=milestones
+        ).select_related('milestone')
 
-        data = []
-        completed = 0
+        progress_map = {p.milestone_id: p for p in progress_qs}
+
+        items = []
+        completed_count = 0
 
         for milestone in milestones:
             progress = progress_map.get(milestone.id)
-            is_completed = progress.is_completed if progress else False
-            if is_completed:
-                completed += 1
 
-            data.append({
-                "milestone": MilestoneSerializer(milestone).data,
-                "progress": ChildMilestoneProgressSerializer(progress).data if progress else None,
+            if progress and progress.is_completed:
+                completed_count += 1
+
+            items.append({
+                "milestone": milestone,
+                "progress": progress,
             })
 
-        total = len(data)
-        percent = round((completed / total) * 100, 2) if total else 0
+        total = len(items)
+        percent = round((completed_count / total) * 100) if total > 0 else 0
 
-        return Response({
+        serializer = ChildMilestoneProgressResponseSerializer({
             "child_id": child.id,
             "total": total,
-            "completed": completed,
+            "completed": completed_count,
             "percent": percent,
-            "items": data,
+            "items": items,
         })
+
+        return Response(serializer.data)
